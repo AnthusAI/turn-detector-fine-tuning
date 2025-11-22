@@ -128,36 +128,93 @@ def plot_training_curves(history: Dict[str, List[float]], model_name: str,
     print(f"Saved {output_file}")
 
 
+def plot_confusion_matrix_single(cm, accuracy, title, subtitle, output_file):
+    """
+    Plot a single, full-width confusion matrix that tells part of the story.
+    """
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    # Calculate percentages for annotations
+    cm_array = np.array(cm)
+    total = cm_array.sum()
+    cm_pct = (cm_array / total * 100).round(1)
+    
+    # Create annotations with both counts and percentages
+    annot = np.array([[f'{cm_array[i,j]:,}\n({cm_pct[i,j]:.1f}%)' 
+                       for j in range(2)] for i in range(2)])
+    
+    # Plot
+    sns.heatmap(cm_array, annot=annot, fmt='', cmap='Blues',
+                xticklabels=['Incomplete', 'Complete'],
+                yticklabels=['Incomplete', 'Complete'],
+                ax=ax, cbar=True, vmin=0, square=True,
+                linewidths=2, linecolor='white',
+                cbar_kws={'label': 'Count'}, annot_kws={'size': 12})
+    
+    ax.set_xlabel('Predicted Label', fontsize=13, fontweight='bold')
+    ax.set_ylabel('True Label', fontsize=13, fontweight='bold')
+    ax.set_title(f'{title}\n{subtitle}', fontsize=14, fontweight='bold', pad=20)
+    
+    # Add accuracy box
+    textstr = f'Accuracy: {accuracy:.1%}\n'
+    textstr += f'FP Rate: {cm_array[0,1]/cm_array[0,:].sum():.1%}\n'
+    textstr += f'FN Rate: {cm_array[1,0]/cm_array[1,:].sum():.1%}'
+    
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+    ax.text(1.35, 0.5, textstr, transform=ax.transAxes, fontsize=11,
+            verticalalignment='center', bbox=props)
+    
+    plt.tight_layout()
+    plt.savefig(FIGURES_DIR / output_file, bbox_inches='tight', dpi=300)
+    plt.close()
+    
+    print(f"Saved {output_file}")
+
+
 def plot_confusion_matrices(results: Dict[str, Dict], output_file: str = "confusion_matrices.png"):
-    """Plot confusion matrices for all models in a grid."""
-    n_models = len(results)
-    n_cols = 3
-    n_rows = (n_models + n_cols - 1) // n_cols
+    """
+    Plot the 3 KEY confusion matrices that tell the story:
+    1. General model on CallCenter (the problem)
+    2. Domain model on CallCenter (the solution)  
+    3. Domain model on General (the trade-off)
     
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 4 * n_rows))
-    axes = axes.flatten() if n_models > 1 else [axes]
+    Each matrix is full-width and tells one part of the narrative.
+    """
     
-    for idx, (model_name, metrics) in enumerate(results.items()):
-        ax = axes[idx]
-        
-        cm = np.array(metrics['confusion_matrix'])
-        
-        # Normalize to percentages
-        cm_pct = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis] * 100
-        
-        # Plot heatmap
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
-                   cbar=False, square=True,
-                   xticklabels=['Incomplete', 'Complete'],
-                   yticklabels=['Incomplete', 'Complete'])
-        
-        ax.set_ylabel('True Label')
-        ax.set_xlabel('Predicted Label')
-        ax.set_title(f'{model_name}\nAccuracy: {metrics["accuracy"]:.3f}')
+    # Story Part 1: The Problem - General model struggles on domain data
+    if 'Model_General' in results and 'CallCenter Test' in results['Model_General']:
+        cm = results['Model_General']['CallCenter Test']['confusion_matrix']
+        acc = results['Model_General']['CallCenter Test']['accuracy']
+        plot_confusion_matrix_single(
+            cm, acc,
+            "Part 1: The Problem",
+            "General model (trained on conversations) tested on call center data",
+            "cm_1_general_on_callcenter.png"
+        )
     
-    # Hide extra subplots
-    for idx in range(n_models, len(axes)):
-        axes[idx].axis('off')
+    # Story Part 2: The Solution - Domain model excels on its data
+    if 'Model_Domain' in results and 'CallCenter Test' in results['Model_Domain']:
+        cm = results['Model_Domain']['CallCenter Test']['confusion_matrix']
+        acc = results['Model_Domain']['CallCenter Test']['accuracy']
+        plot_confusion_matrix_single(
+            cm, acc,
+            "Part 2: The Solution",
+            "Domain model (trained on call center) tested on call center data",
+            "cm_2_domain_on_callcenter.png"
+        )
+    
+    # Story Part 3: The Trade-off - Domain model loses generalization
+    if 'Model_Domain' in results and 'General Test' in results['Model_Domain']:
+        cm = results['Model_Domain']['General Test']['confusion_matrix']
+        acc = results['Model_Domain']['General Test']['accuracy']
+        plot_confusion_matrix_single(
+            cm, acc,
+            "Part 3: The Trade-off",
+            "Domain model (specialized) tested on general conversations",
+            "cm_3_domain_on_general.png"
+        )
+    
+    print("✓ Generated 3 narrative confusion matrices (not 16!)")
     
     plt.tight_layout()
     plt.savefig(FIGURES_DIR / output_file, bbox_inches='tight')

@@ -2,13 +2,17 @@
 Training script for turn detection models using MobileBERT.
 """
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
+    AutoModel,
     TrainingArguments,
     Trainer,
-    EarlyStoppingCallback
+    EarlyStoppingCallback,
+    PreTrainedModel,
+    PretrainedConfig
 )
 from datasets import load_from_disk
 import numpy as np
@@ -18,7 +22,48 @@ from pathlib import Path
 from typing import Dict, Optional
 import argparse
 
-from utils import save_metrics, print_metrics_summary
+from src.utils import save_metrics, print_metrics_summary
+
+
+class MobileBERTForSequenceClassificationNormalized(PreTrainedModel):
+    """
+    MobileBERT with LayerNorm before classifier to fix scale issues.
+    MobileBERT's pooled outputs have massive magnitude (~millions) which causes
+    gradient explosion. Adding LayerNorm fixes this.
+    """
+    config_class = PretrainedConfig
+    base_model_prefix = "mobilebert"
+    
+    def __init__(self, config):
+        super().__init__(config)
+        self.num_labels = getattr(config, 'num_labels', 2)
+        self.config = config
+        self.mobilebert = AutoModel.from_pretrained("google/mobilebert-uncased")
+        
+        hidden_size = getattr(config, 'hidden_size', 512)
+        
+        # Add LayerNorm to normalize the massive pooled outputs
+        self.layer_norm = nn.LayerNorm(hidden_size)
+        self.dropout = nn.Dropout(0.1)
+        self.classifier = nn.Linear(hidden_size, self.num_labels)
+        
+    def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
+        outputs = self.mobilebert(input_ids=input_ids, attention_mask=attention_mask)
+        
+        # Get pooled output (CLS token)
+        pooled_output = outputs.pooler_output if hasattr(outputs, 'pooler_output') else outputs.last_hidden_state[:, 0, :]
+        
+        # CRITICAL FIX: Normalize before classification
+        pooled_output = self.layer_norm(pooled_output)
+        pooled_output = self.dropout(pooled_output)
+        logits = self.classifier(pooled_output)
+        
+        loss = None
+        if labels is not None:
+            loss_fct = nn.CrossEntropyLoss()
+            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+        
+        return {'loss': loss, 'logits': logits} if loss is not None else {'logits': logits}
 
 
 class TurnDetectionTrainer:
@@ -43,16 +88,15 @@ class TurnDetectionTrainer:
         # Initialize model
         if from_checkpoint:
             print(f"Loading model from checkpoint: {from_checkpoint}")
-            self.model = AutoModelForSequenceClassification.from_pretrained(
-                from_checkpoint,
-                num_labels=num_labels
+            self.model = MobileBERTForSequenceClassificationNormalized.from_pretrained(
+                from_checkpoint
             )
         else:
-            print(f"Loading model from {model_name}...")
-            self.model = AutoModelForSequenceClassification.from_pretrained(
-                model_name,
-                num_labels=num_labels
-            )
+            print(f"Loading custom MobileBERT model (with LayerNorm fix)...")
+            from transformers import AutoConfig
+            config = AutoConfig.from_pretrained(model_name)
+            config.num_labels = num_labels
+            self.model = MobileBERTForSequenceClassificationNormalized(config)
         
         self.training_history = {
             'train_loss': [],
@@ -133,6 +177,8 @@ class TurnDetectionTrainer:
             save_total_limit=2,
             learning_rate=learning_rate,
             report_to="none",  # Disable wandb/tensorboard
+            max_grad_norm=1.0,  # Critical for MobileBERT: clip gradients to prevent explosion
+            fp16=False,  # Disable mixed precision as it can amplify scaling issues
         )
         
         # Create trainer

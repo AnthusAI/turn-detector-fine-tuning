@@ -56,5 +56,9 @@ results/metrics/*
 # Logs
 *.log
 wandb/
+experiment_log.txt
+
+# Temporary/debug scripts
+src/debug_*.py
 
 

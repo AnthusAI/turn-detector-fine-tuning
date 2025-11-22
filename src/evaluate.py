@@ -3,7 +3,7 @@ Comprehensive evaluation script for turn detection models.
 """
 import torch
 import numpy as np
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoTokenizer, AutoConfig
 from datasets import load_from_disk
 from sklearn.metrics import (
     accuracy_score,
@@ -16,8 +16,10 @@ import json
 from typing import Dict, List, Tuple
 import argparse
 from tqdm import tqdm
+from safetensors.torch import load_file
 
-from utils import save_metrics, print_metrics_summary, measure_inference_latency
+from src.utils import save_metrics, print_metrics_summary, measure_inference_latency
+from src.train import MobileBERTForSequenceClassificationNormalized
 
 
 class ModelEvaluator:
@@ -29,7 +31,16 @@ class ModelEvaluator:
         
         print(f"Loading model from {model_path}...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        
+        # Load custom MobileBERT model
+        config = AutoConfig.from_pretrained(model_path)
+        config.num_labels = 2
+        self.model = MobileBERTForSequenceClassificationNormalized(config)
+        
+        # Load saved weights
+        state_dict = load_file(f"{model_path}/model.safetensors")
+        self.model.load_state_dict(state_dict, strict=False)
+        
         self.model.to(device)
         self.model.eval()
     
@@ -55,7 +66,7 @@ class ModelEvaluator:
                 inputs = {k: v.to(self.device) for k, v in inputs.items()}
                 
                 outputs = self.model(**inputs)
-                logits = outputs.logits
+                logits = outputs['logits'] if isinstance(outputs, dict) else outputs.logits
                 probs = torch.softmax(logits, dim=-1)
                 pred = torch.argmax(logits, dim=-1)
                 

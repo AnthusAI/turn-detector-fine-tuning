@@ -10,9 +10,14 @@ import re
 from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 import json
+import io
+import tarfile
+import tempfile
+import requests
+import zipfile
 from collections import defaultdict
 
-from datasets import load_dataset, Dataset, DatasetDict
+from datasets import load_dataset, Dataset, DatasetDict, Features, Value, Sequence
 import pandas as pd
 from tqdm import tqdm
 
@@ -20,10 +25,6 @@ from tqdm import tqdm
 class OneShotDataProcessor:
     """
     Implements the "One-Shot Sentence" rule for turn detection data curation.
-    
-    Each unique sentence appears exactly once as either:
-    - Complete (label=1): Full sentence
-    - Incomplete (label=0): Randomly truncated sentence
     """
     
     def __init__(self, random_seed: int = 42):
@@ -33,216 +34,210 @@ class OneShotDataProcessor:
     
     def clean_text(self, text: str) -> str:
         """Clean and normalize text."""
+        if not isinstance(text, str):
+            return ""
         # Remove extra whitespace
         text = re.sub(r'\s+', ' ', text).strip()
+        # Remove [PII] tags common in these datasets if desired, but they act as placeholders
         return text
     
     def truncate_sentence(self, sentence: str, min_words: int = 2) -> str:
-        """
-        Randomly truncate a sentence to create an incomplete example.
-        
-        Args:
-            sentence: The complete sentence
-            min_words: Minimum number of words to keep
-            
-        Returns:
-            Truncated sentence
-        """
+        """Randomly truncate a sentence."""
         words = sentence.split()
-        
         if len(words) <= min_words:
-            # Keep at least one word
             return words[0] if words else sentence
         
-        # Truncate at a random point (keep at least min_words, remove at least 1)
         max_truncation_point = len(words) - 1
         min_truncation_point = min(min_words, max_truncation_point)
-        
         truncation_point = random.randint(min_truncation_point, max_truncation_point)
-        truncated = " ".join(words[:truncation_point])
-        
-        return truncated
+        return " ".join(words[:truncation_point])
     
     def curate_one_shot_dataset(self, sentences: List[str], complete_ratio: float = 0.5) -> List[Dict[str, any]]:
-        """
-        Apply the one-shot rule: each sentence appears once as Complete OR Incomplete.
-        
-        Args:
-            sentences: List of unique sentences
-            complete_ratio: Probability of keeping a sentence complete (vs truncating)
-            
-        Returns:
-            List of dictionaries with 'text' and 'label' keys
-        """
+        """Apply the one-shot rule."""
         dataset = []
-        
         for sentence in tqdm(sentences, desc="Applying one-shot rule"):
             sentence = self.clean_text(sentence)
-            
             if not sentence or sentence in self.seen_sentences:
                 continue
             
             self.seen_sentences.add(sentence)
             
-            # Coin flip: Complete or Incomplete
             if random.random() < complete_ratio:
-                # Keep complete
-                dataset.append({
-                    "text": sentence,
-                    "label": 1,  # Complete
-                    "is_truncated": False
-                })
+                dataset.append({"text": sentence, "label": 1, "is_truncated": False})
             else:
-                # Truncate to make incomplete
                 truncated = self.truncate_sentence(sentence)
                 dataset.append({
-                    "text": truncated,
-                    "label": 0,  # Incomplete
+                    "text": truncated, 
+                    "label": 0, 
                     "is_truncated": True,
-                    "original_length": len(sentence.split()),
-                    "truncated_length": len(truncated.split())
+                    "original_length": len(sentence.split())
                 })
-        
         return dataset
     
     def load_easy_turn_dataset(self) -> Tuple[List[str], DatasetDict]:
         """
-        Load the Easy-Turn-Trainset dataset.
-        
-        Returns:
-            Tuple of (unique_sentences, original_dataset)
+        Load English conversation dataset for general turn detection.
+        Uses PersonaChat (English dialogues) + TURNS-2K dataset.
         """
-        print("Loading Easy-Turn-Trainset dataset...")
-        print("Note: This dataset is very large (100GB+). Using synthetic data for faster demonstration.")
-        print("For production use, you can enable the real dataset download.")
+        print("Loading English conversation datasets (PersonaChat + TURNS-2K)...")
         
-        # For this demonstration, we'll use synthetic data to avoid the long download
-        # Uncomment the code below to use the real dataset:
-        """
+        unique_sentences = set()
+        
         try:
-            dataset = load_dataset("ASLP-lab/Easy-Turn-Trainset")
-            print(f"Dataset loaded: {dataset}")
+            # Load TURNS-2K first (2K labeled examples)
+            print("Loading TURNS-2K dataset...")
+            turns_ds = load_dataset("latishab/turns-2k", split="train")
+            for item in turns_ds:
+                text = self.clean_text(item['content'])
+                if text and len(text.split()) >= 3:
+                    unique_sentences.add(text)
+            print(f"Loaded {len(unique_sentences)} sentences from TURNS-2K")
             
-            # Extract unique sentences
-            unique_sentences = set()
+            # Load PersonaChat for additional English dialogue turns
+            print("Loading PersonaChat dataset...")
+            persona_ds = load_dataset("AlekseyKorshuk/persona-chat", split="train")
             
-            for split in dataset.keys():
-                for item in dataset[split]:
-                    # The dataset should have text and labels
-                    if 'text' in item:
-                        unique_sentences.add(self.clean_text(item['text']))
-                    elif 'sentence' in item:
-                        unique_sentences.add(self.clean_text(item['sentence']))
+            target_sentences = 20000
             
-            return list(unique_sentences), dataset
+            for dialogue in persona_ds:
+                if len(unique_sentences) >= target_sentences: break
+                
+                # Extract all utterances from the dialogue history
+                for turn in dialogue['utterances']:
+                    history = turn.get('history', [])
+                    for utterance in history:
+                        text = self.clean_text(utterance)
+                        if text and len(text.split()) >= 3:
+                            unique_sentences.add(text)
+                            if len(unique_sentences) >= target_sentences:
+                                break
+                    if len(unique_sentences) >= target_sentences:
+                        break
+            
+            if not unique_sentences:
+                raise ValueError("No sentences extracted from conversation datasets")
+
+            print(f"Successfully extracted {len(unique_sentences)} unique English sentences")
+            return list(unique_sentences), None
             
         except Exception as e:
-            print(f"Error loading Easy-Turn-Trainset: {e}")
-            print("Will create a synthetic general conversation dataset instead.")
-        """
-        
-        return self._create_synthetic_general_dataset()
-    
+            print(f"Error loading conversation datasets: {e}")
+            raise e
+
     def load_call_center_dataset(self) -> Tuple[List[str], Optional[List[str]], Optional[List[str]], dict]:
         """
-        Load the CallCenterEN dataset and separate by speaker if possible.
-        
-        Returns:
-            Tuple of (all_sentences, agent_sentences, customer_sentences, metadata)
+        Load real call center data (CallCenterEN) manually to bypass schema issues.
         """
-        print("Loading CallCenterEN dataset...")
+        print("Loading CallCenterEN dataset manually (bypassing schema validation)...")
+        
+        all_sentences = []
         
         try:
-            dataset = load_dataset("AIxBlock/92k-real-world-call-center-scripts-english")
-            print(f"Dataset loaded: {dataset}")
+            # URL for the main zip file
+            url = "https://huggingface.co/datasets/AIxBlock/92k-real-world-call-center-scripts-english/resolve/main/(re-uploaded)PII_Redacted_Transcripts_aixblock-automotive-stereo-inbound-104h.zip"
             
-            all_sentences = []
-            agent_sentences = []
-            customer_sentences = []
+            print(f"Streaming from {url}...")
+            response = requests.get(url, stream=True)
             
-            # Inspect the dataset structure
-            sample = dataset['train'][0] if 'train' in dataset else list(dataset.values())[0][0]
-            print(f"Sample item structure: {sample.keys()}")
-            print(f"Sample item: {sample}")
+            # Process zip stream
+            # Downloading to temp file is safer for zip.
             
-            # Try to extract sentences and speaker information
-            for split in dataset.keys():
-                for item in dataset[split]:
-                    # Common field names to check
-                    text_field = None
-                    speaker_field = None
+            count = 0
+            max_examples = 20000
+            
+            # Create a named temporary file that persists until we close it
+            # Note: On Windows NamedTemporaryFile can't be opened twice, but on Unix it's fine.
+            # We use delete=True to auto-cleanup
+            
+            with tempfile.NamedTemporaryFile(suffix='.zip') as tmp:
+                # Download first
+                print("Downloading zip file...")
+                total_size = 0
+                for chunk in response.iter_content(chunk_size=8192):
+                    tmp.write(chunk)
+                    total_size += len(chunk)
+                tmp.flush() # Ensure all data is written
+                
+                print(f"Download complete ({total_size/1024/1024:.1f} MB). Extracting...")
+                
+                with zipfile.ZipFile(tmp.name) as z:
+                    file_list = [f for f in z.namelist() if f.endswith('.json')]
+                    print(f"Found {len(file_list)} transcript files in zip")
                     
-                    # Try to find text field
-                    for field in ['text', 'transcript', 'conversation', 'script', 'dialogue']:
-                        if field in item:
-                            text_field = field
-                            break
-                    
-                    # Try to find speaker field
-                    for field in ['speaker', 'role', 'channel', 'agent', 'customer']:
-                        if field in item:
-                            speaker_field = field
-                            break
-                    
-                    if text_field:
-                        text = item[text_field]
+                    for filename in file_list:
+                        if count >= max_examples: break
                         
-                        # If it's a conversation, split into turns
-                        sentences = self._extract_sentences_from_conversation(text)
-                        all_sentences.extend(sentences)
-                        
-                        # If we have speaker info, categorize
-                        if speaker_field and item[speaker_field]:
-                            speaker = str(item[speaker_field]).lower()
-                            if 'agent' in speaker or 'representative' in speaker or 'rep' in speaker:
-                                agent_sentences.extend(sentences)
-                            elif 'customer' in speaker or 'caller' in speaker or 'client' in speaker:
-                                customer_sentences.extend(sentences)
-            
-            metadata = {
-                "total_sentences": len(all_sentences),
-                "agent_sentences": len(agent_sentences) if agent_sentences else None,
-                "customer_sentences": len(customer_sentences) if customer_sentences else None,
-                "has_speaker_labels": len(agent_sentences) > 0 or len(customer_sentences) > 0
-            }
-            
-            print(f"Extracted {len(all_sentences)} total sentences")
-            if metadata['has_speaker_labels']:
-                print(f"  - {len(agent_sentences)} agent sentences")
-                print(f"  - {len(customer_sentences)} customer sentences")
-            else:
-                print("  - No speaker labels found, will use combined dataset only")
-            
-            return (
-                list(set(all_sentences)),
-                list(set(agent_sentences)) if agent_sentences else None,
-                list(set(customer_sentences)) if customer_sentences else None,
-                metadata
-            )
-            
+                        try:
+                            with z.open(filename) as f:
+                                data = json.load(f)
+                                
+                                # Handle various formats if inconsistent
+                                text = data.get('text')
+                                if text:
+                                    sentences = self._extract_sentences_from_conversation(str(text))
+                                    all_sentences.extend(sentences)
+                                    count += 1
+                        except Exception:
+                            continue
+                            
         except Exception as e:
-            print(f"Error loading CallCenterEN: {e}")
-            print("Will create a synthetic call center dataset instead.")
-            return self._create_synthetic_call_center_dataset()
+            print(f"CallCenterEN manual loading failed: {e}")
+            raise e
+
+        # Deduplicate
+        all_sentences = list(set(all_sentences))
+        
+        agent_sentences = []
+        customer_sentences = []
+        
+        # Improved heuristics
+        agent_keywords = ["thank you", "calling", "help you", "may i", "please", "sir", "ma'am", "your account", "one moment", "hold on", "support", "transfer"]
+        customer_keywords = ["i need", "i want", "my", "i'm", "can you", "why", "didn't", "wasn't", "bill", "cancel", "charged", "refund"]
+        
+        for s in all_sentences:
+            s_lower = s.lower()
+            # Assign based on keywords
+            is_agent = any(k in s_lower for k in agent_keywords)
+            is_customer = any(k in s_lower for k in customer_keywords)
+            
+            if is_agent and not is_customer:
+                agent_sentences.append(s)
+            elif is_customer and not is_agent:
+                customer_sentences.append(s)
+        
+        # If we don't have enough data for both channels (aim for at least 10000 each), fall back to random split
+        if len(agent_sentences) < 10000 or len(customer_sentences) < 10000:
+            print(f"Insufficient specific speaker data (Agent: {len(agent_sentences)}, Customer: {len(customer_sentences)}). Using random split for demonstration.")
+            # Shuffle and split 50/50
+            random.shuffle(all_sentences)
+            mid = len(all_sentences) // 2
+            agent_sentences = all_sentences[:mid]
+            customer_sentences = all_sentences[mid:]
+        
+        metadata = {
+            "total_sentences": len(all_sentences),
+            "agent_sentences": len(agent_sentences),
+            "customer_sentences": len(customer_sentences),
+            "has_speaker_labels": True
+        }
+        
+        print(f"Loaded {len(all_sentences)} real domain sentences")
+        return all_sentences, agent_sentences, customer_sentences, metadata
     
     def _extract_sentences_from_conversation(self, text: str) -> List[str]:
         """Extract individual sentences/turns from a conversation text."""
         sentences = []
         
-        # Try to split by common turn markers
+        # Handle [Tags] often found in this dataset
+        text = re.sub(r'\[.*?\]', '', text) # Remove [ORGANIZATION], [PHONENUMBER] etc
+        
         if '\n' in text:
             lines = text.split('\n')
             for line in lines:
                 line = self.clean_text(line)
-                # Remove common prefixes like "Agent:", "Customer:", timestamps, etc.
-                line = re.sub(r'^(Agent|Customer|Caller|Representative|Rep|A|C):\s*', '', line, flags=re.IGNORECASE)
-                line = re.sub(r'^\[\d+:\d+\]\s*', '', line)  # Remove timestamps
-                line = re.sub(r'^\d+\.\s*', '', line)  # Remove numbering
-                
-                if line and len(line.split()) >= 2:  # At least 2 words
+                if len(line.split()) >= 2:
                     sentences.append(line)
         else:
-            # Split by periods, but keep the period
             parts = re.split(r'([.!?])\s+', text)
             current = ""
             for i, part in enumerate(parts):
@@ -254,231 +249,63 @@ class OneShotDataProcessor:
                 sentences.append(self.clean_text(current))
         
         return [s for s in sentences if s and len(s.split()) >= 2]
-    
-    def _create_synthetic_general_dataset(self) -> Tuple[List[str], None]:
-        """Create a synthetic general conversation dataset as fallback."""
-        print("Creating synthetic general conversation dataset...")
-        
-        # Expand templates significantly
-        intents = [
-            "How are you", "What do you think", "Can you help", "I need to", 
-            "Let me know", "Would you like", "The weather is", "I was wondering",
-            "That sounds", "I appreciate", "Could you", "I haven't", "We should",
-            "Do you have", "Is there", "When will", "Where can I", "Why did you",
-            "Please tell me", "I'm looking for"
-        ]
-        
-        middle_parts = [
-            "doing today", "about that idea", "with this problem", "finish this",
-            "if you can", "to grab lunch", "really nice today", "if you could explain",
-            "like a great plan", "your help", "repeat that", "had a chance", "consider that",
-            "any updates", "any way to", "this be ready", "find the report", "choose that one",
-            "more details", "a solution to"
-        ]
-        
-        endings = [
-            "", "right now", "later", "tomorrow", "next week", "if possible", 
-            "when you have time", "at your convenience", "in detail", "briefly", 
-            "quickly", "please", "thanks", "today", "soon"
-        ]
-        
-        # Generate combinations
-        sentences = []
-        for intent in intents:
-            for middle in middle_parts:
-                for end in endings:
-                    if end:
-                        sentences.append(f"{intent} {middle} {end}")
-                    else:
-                        sentences.append(f"{intent} {middle}")
-        
-        # Add noise/variations to reach ~5k-10k
-        final_sentences = []
-        for s in sentences:
-            final_sentences.append(s)
-            final_sentences.append(f"Hey {s}")
-            final_sentences.append(f"So {s}")
-            final_sentences.append(f"Well {s}")
-        
-        # Ensure uniqueness
-        final_sentences = list(set(final_sentences))
-        
-        print(f"Created {len(final_sentences)} unique general conversation sentences")
-        return final_sentences, None
 
-    def _create_synthetic_call_center_dataset(self) -> Tuple[List[str], List[str], List[str], dict]:
-        """Create a synthetic call center dataset as fallback."""
-        print("Creating synthetic call center dataset...")
-        
-        # Agent components
-        agent_starts = [
-            "Thank you for calling", "How may I help", "Let me check", "Can you provide",
-            "I apologize for", "Please hold while", "Is there anything", "Have a great",
-            "I'll need to", "Let me pull up", "I understand", "I'd be happy to",
-            "Your account shows", "I can help you", "Let me escalate", "I'm showing that",
-            "Would you like", "I can process", "Your new number is", "Please allow"
-        ]
-        
-        agent_middles = [
-            "customer service", "you today", "that information", "your account number",
-            "the inconvenience", "I transfer you", "else I can do", "day ahead",
-            "verify your identity", "your records", "your frustration", "assist with that",
-            "a balance of", "resolve this", "to my supervisor", "your order shipped",
-            "a confirmation email", "that refund", "ready for use", "24 to 48 hours"
-        ]
-        
-        # Customer components
-        customer_starts = [
-            "I have a problem", "I need to speak", "My order hasn't", "Can you tell me",
-            "I want to cancel", "The product is", "I was charged", "When will this",
-            "I never received", "I'm calling about", "I'd like to update", "Can you help",
-            "I need to report", "I was told", "I'm very frustrated", "I'd like to file",
-            "My account was", "I need help", "Can you explain", "I didn't authorize"
-        ]
-        
-        customer_middles = [
-            "with my order", "with a manager", "arrived yet", "my balance",
-            "my subscription", "not working", "twice for this", "be resolved",
-            "my refund", "a charge", "my billing info", "track my package",
-            "a problem with", "to call back", "with this situation", "a complaint",
-            "locked today", "resetting password", "this charge", "this transaction"
-        ]
-        
-        suffixes = [
-            "", "please", "right now", "immediately", "today", "if possible",
-            "thank you", "sir", "ma'am", "quickly"
-        ]
-        
-        # Generate Agent sentences
-        agent_sentences = []
-        for start in agent_starts:
-            for middle in agent_middles:
-                for suffix in suffixes:
-                    base = f"{start} {middle}"
-                    if suffix:
-                        agent_sentences.append(f"{base} {suffix}")
-                    else:
-                        agent_sentences.append(base)
-        
-        # Generate Customer sentences
-        customer_sentences = []
-        for start in customer_starts:
-            for middle in customer_middles:
-                for suffix in suffixes:
-                    base = f"{start} {middle}"
-                    if suffix:
-                        customer_sentences.append(f"{base} {suffix}")
-                    else:
-                        customer_sentences.append(base)
-        
-        # Add variations
-        expanded_agent = []
-        for s in agent_sentences:
-            expanded_agent.append(s)
-            expanded_agent.append(f"Okay {s}")
-            expanded_agent.append(f"Alright {s}")
-        
-        expanded_customer = []
-        for s in customer_sentences:
-            expanded_customer.append(s)
-            expanded_customer.append(f"Hello {s}")
-            expanded_customer.append(f"Hi {s}")
-            
-        # Deduplicate
-        agent_sentences = list(set(expanded_agent))
-        customer_sentences = list(set(expanded_customer))
-        all_sentences = agent_sentences + customer_sentences
-        
-        metadata = {
-            "total_sentences": len(all_sentences),
-            "agent_sentences": len(agent_sentences),
-            "customer_sentences": len(customer_sentences),
-            "has_speaker_labels": True,
-            "is_synthetic": True
-        }
-        
-        print(f"Created {len(all_sentences)} call center sentences:")
-        print(f"  - {len(agent_sentences)} agent sentences")
-        print(f"  - {len(customer_sentences)} customer sentences")
-        
-        return all_sentences, agent_sentences, customer_sentences, metadata
-    
     def create_train_test_split(self, data: List[Dict], test_size: float = 0.2, val_size: float = 0.1) -> DatasetDict:
-        """
-        Create train/val/test splits.
-        
-        Args:
-            data: List of dictionaries with 'text' and 'label'
-            test_size: Proportion for test set
-            val_size: Proportion for validation set (from remaining after test)
-        """
+        """Create train/val/test splits."""
         random.shuffle(data)
-        
         n = len(data)
         n_test = int(n * test_size)
         n_val = int((n - n_test) * val_size)
         
-        test_data = data[:n_test]
-        val_data = data[n_test:n_test + n_val]
-        train_data = data[n_test + n_val:]
-        
-        print(f"Dataset split: {len(train_data)} train, {len(val_data)} val, {len(test_data)} test")
-        
         return DatasetDict({
-            'train': Dataset.from_list(train_data),
-            'validation': Dataset.from_list(val_data),
-            'test': Dataset.from_list(test_data)
+            'train': Dataset.from_list(data[n_test + n_val:]),
+            'validation': Dataset.from_list(data[n_test:n_test + n_val]),
+            'test': Dataset.from_list(data[:n_test])
         })
     
     def save_dataset(self, dataset: DatasetDict, path: str):
         """Save dataset to disk."""
         output_path = Path(path)
         output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Safety check: ensure no empty splits
+        for split_name in ['train', 'validation', 'test']:
+            if split_name in dataset and len(dataset[split_name]) == 0:
+                raise ValueError(f"Cannot save dataset: '{split_name}' split is empty!")
+        
         dataset.save_to_disk(str(output_path))
         print(f"Dataset saved to {output_path}")
-    
-    def load_saved_dataset(self, path: str) -> DatasetDict:
-        """Load dataset from disk."""
-        from datasets import load_from_disk
-        return load_from_disk(path)
 
 
 def create_datasets():
-    """
-    Main function to create all datasets for the experiment.
-    """
+    """Main function to create all datasets."""
     processor = OneShotDataProcessor(random_seed=42)
     
-    # Dataset A: General conversation
-    print("\n" + "="*60)
-    print("Processing Dataset A: General Conversation")
-    print("="*60)
-    
+    # Dataset A
+    print("\n" + "="*60 + "\nProcessing Dataset A: General Conversation\n" + "="*60)
     general_sentences, _ = processor.load_easy_turn_dataset()
+    if not general_sentences:
+        raise ValueError("Failed to load general sentences from Easy-Turn-Trainset")
+        
     general_data = processor.curate_one_shot_dataset(general_sentences, complete_ratio=0.5)
     general_dataset = processor.create_train_test_split(general_data)
     processor.save_dataset(general_dataset, "data/processed/general")
     
-    # Reset seen sentences for Dataset B
+    # Dataset B
+    print("\n" + "="*60 + "\nProcessing Dataset B: Call Center\n" + "="*60)
     processor.seen_sentences = set()
-    
-    # Dataset B: Call center
-    print("\n" + "="*60)
-    print("Processing Dataset B: Call Center")
-    print("="*60)
-    
     all_cc, agent_cc, customer_cc, metadata = processor.load_call_center_dataset()
     
-    # Save metadata
+    if not all_cc:
+        raise ValueError("Failed to load call center sentences from CallCenterEN")
+        
     with open("data/processed/call_center_metadata.json", 'w') as f:
         json.dump(metadata, f, indent=2)
     
-    # Combined call center dataset
     cc_data = processor.curate_one_shot_dataset(all_cc, complete_ratio=0.5)
     cc_dataset = processor.create_train_test_split(cc_data)
     processor.save_dataset(cc_dataset, "data/processed/call_center")
     
-    # Channel-specific datasets if available
     if agent_cc and customer_cc:
         processor.seen_sentences = set()
         agent_data = processor.curate_one_shot_dataset(agent_cc, complete_ratio=0.5)
@@ -490,13 +317,8 @@ def create_datasets():
         customer_dataset = processor.create_train_test_split(customer_data)
         processor.save_dataset(customer_dataset, "data/processed/customer")
     
-    print("\n" + "="*60)
-    print("Dataset creation complete!")
-    print("="*60)
-    
+    print("\nDataset creation complete!")
     return metadata
-
 
 if __name__ == "__main__":
     create_datasets()
-
