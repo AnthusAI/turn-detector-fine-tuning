@@ -38,9 +38,10 @@ models/agent/*
 models/customer/*
 !models/*/.gitkeep
 
-# Results
-results/metrics/*
-!results/metrics/.gitkeep
+# Results - ignore generated metrics but keep figures
+chapter_01_fine_tuning/results/metrics/*
+!chapter_01_fine_tuning/results/metrics/.gitkeep
+!chapter_01_fine_tuning/results/figures/*.png
 
 # IDE
 .vscode/
@@ -60,5 +61,3 @@ experiment_log.txt
 
 # Temporary/debug scripts
 src/debug_*.py
-
-

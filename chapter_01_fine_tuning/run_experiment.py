@@ -30,14 +30,14 @@ print("PHASE 1: TRAINING")
 print("="*80)
 
 # Load datasets
-general_ds = load_from_disk("data/processed/general")
-call_center_ds = load_from_disk("data/processed/call_center")
-agent_ds = load_from_disk("data/processed/agent")
-customer_ds = load_from_disk("data/processed/customer")
+general_ds = load_from_disk("../data/processed/general")
+call_center_ds = load_from_disk("../data/processed/call_center")
+agent_ds = load_from_disk("../data/processed/agent")
+customer_ds = load_from_disk("../data/processed/customer")
 
 # Model 1: General
 print("\n[1/4] Training Model_General...")
-trainer_general = TurnDetectionTrainer(output_dir="models/general")
+trainer_general = TurnDetectionTrainer(output_dir="../models/general")
 trainer_general.train(
     train_dataset=general_ds['train'],
     eval_dataset=general_ds['validation'],
@@ -48,7 +48,7 @@ trainer_general.train(
 
 # Model 2: Domain (Call Center)
 print("\n[2/4] Training Model_Domain...")
-trainer_domain = TurnDetectionTrainer(output_dir="models/domain")
+trainer_domain = TurnDetectionTrainer(output_dir="../models/domain")
 trainer_domain.train(
     train_dataset=call_center_ds['train'],
     eval_dataset=call_center_ds['validation'],
@@ -59,7 +59,7 @@ trainer_domain.train(
 
 # Model 3: Agent
 print("\n[3/4] Training Model_Agent...")
-trainer_agent = TurnDetectionTrainer(output_dir="models/agent")
+trainer_agent = TurnDetectionTrainer(output_dir="../models/agent")
 trainer_agent.train(
     train_dataset=agent_ds['train'],
     eval_dataset=agent_ds['validation'],
@@ -70,7 +70,7 @@ trainer_agent.train(
 
 # Model 4: Customer
 print("\n[4/4] Training Model_Customer...")
-trainer_customer = TurnDetectionTrainer(output_dir="models/customer")
+trainer_customer = TurnDetectionTrainer(output_dir="../models/customer")
 trainer_customer.train(
     train_dataset=customer_ds['train'],
     eval_dataset=customer_ds['validation'],
@@ -90,10 +90,10 @@ print("="*80)
 all_results = {}
 
 models_to_eval = [
-    ("Model_General", "models/general"),
-    ("Model_Domain", "models/domain"),
-    ("Model_Agent", "models/agent"),
-    ("Model_Customer", "models/customer"),
+    ("Model_General", "../models/general"),
+    ("Model_Domain", "../models/domain"),
+    ("Model_Agent", "../models/agent"),
+    ("Model_Customer", "../models/customer"),
 ]
 
 test_sets = [
