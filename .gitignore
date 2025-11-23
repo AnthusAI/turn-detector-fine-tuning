@@ -36,12 +36,25 @@ models/general/*
 models/domain/*
 models/agent/*
 models/customer/*
+models/general_normalized/*
+models/domain_normalized/*
+models/agent_normalized/*
+models/customer_normalized/*
 !models/*/.gitkeep
 
 # Results - ignore generated metrics but keep figures
 chapter_01_fine_tuning/results/metrics/*
 !chapter_01_fine_tuning/results/metrics/.gitkeep
 !chapter_01_fine_tuning/results/figures/*.png
+
+# Chapter 2 - ignore generated markdown (can regenerate)
+chapter_02_service/streaming_examples.md
+chapter_02_service/punctuation_robustness_results.md
+
+# Chapter 3 results
+chapter_03_normalized/results/metrics/*
+!chapter_03_normalized/results/figures/*.png
+chapter_03_normalized/experiment_log.txt
 
 # IDE
 .vscode/

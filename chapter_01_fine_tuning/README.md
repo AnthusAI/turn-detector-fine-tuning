@@ -52,6 +52,8 @@ To avoid memorizing exact sentences, we applied a **one-shot rule**: every uniqu
 
 **Key takeaway**: Domain-specific training improves call center turn detection accuracy by **12.5 percentage points** (87.5% → 100%).
 
+⚠️ **Note:** The 100% accuracy is suspiciously perfect. Chapter 2 reveals why: the models learned to detect punctuation, not semantic turn completion. The real accuracy on normalized text (Chapter 3) is 77.9%.
+
 ---
 
 ## What the Model Actually Learned (Fewer Charts, More Story)
@@ -376,4 +378,20 @@ If you use this code or approach in your research, please cite:
 
 ---
 
-*This experiment demonstrates that domain-specific fine-tuning can substantially improve turn detection accuracy, but the decision to deploy domain-specific models should weigh the accuracy gains against the operational costs of maintaining multiple models.*
+## What We Learned (and What Chapter 2 Revealed)
+
+This experiment shows that domain-specific fine-tuning can improve turn detection accuracy on test data. **100% accuracy looks impressive.**
+
+But Chapter 2 revealed an uncomfortable truth: **these models are punctuation detectors, not turn detectors.**
+
+When we tested the models on text with all punctuation removed:
+- **General Model:** 33% of predictions changed
+- **Domain Model:** **67% of predictions changed** (worse than General!)
+
+The models learned to recognize periods and question marks, not semantic patterns of turn completion. This means:
+- They're **redundant** when ASR provides punctuation (just echoing the ASR's decision)
+- They're **useless** when ASR doesn't provide punctuation (predict "Incomplete" for everything)
+
+**The real test continues in Chapter 3:** Can we train models on normalized text (no punctuation) to force them to learn semantic understanding? Or is punctuation the only learnable signal for text-based turn detection?
+
+*This experiment suggests that domain-specific fine-tuning can improve test accuracy, but the decision to deploy these models should weigh the accuracy gains against both operational costs and whether they provide independent value beyond ASR punctuation decisions.*

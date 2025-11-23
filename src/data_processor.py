@@ -41,6 +41,21 @@ class OneShotDataProcessor:
         # Remove [PII] tags common in these datasets if desired, but they act as placeholders
         return text
     
+    def normalize_text(self, text: str) -> str:
+        """
+        Normalize text by removing all punctuation and lowercasing.
+        Forces models to learn semantic patterns instead of punctuation shortcuts.
+        """
+        if not isinstance(text, str):
+            return ""
+        # Remove all punctuation
+        text = re.sub(r'[^\w\s]', '', text)
+        # Lowercase
+        text = text.lower()
+        # Remove extra whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+    
     def truncate_sentence(self, sentence: str, min_words: int = 2) -> str:
         """Randomly truncate a sentence."""
         words = sentence.split()
@@ -319,6 +334,62 @@ def create_datasets():
     
     print("\nDataset creation complete!")
     return metadata
+
+
+def create_normalized_datasets():
+    """
+    Create normalized versions of all datasets (punctuation removed, lowercased).
+    For Chapter 3: training on normalized text to force semantic learning.
+    """
+    from datasets import load_from_disk
+    
+    print("\n" + "="*80)
+    print("CREATING NORMALIZED DATASETS FOR CHAPTER 3")
+    print("="*80)
+    
+    processor = OneShotDataProcessor()
+    
+    def normalize_dataset(dataset_dict: DatasetDict, name: str) -> DatasetDict:
+        """Apply text normalization to a dataset."""
+        print(f"\nNormalizing {name}...")
+        
+        def normalize_example(example):
+            example['text'] = processor.normalize_text(example['text'])
+            return example
+        
+        normalized = DatasetDict({
+            split: dataset_dict[split].map(normalize_example, desc=f"Normalizing {split}")
+            for split in dataset_dict.keys()
+        })
+        return normalized
+    
+    # Load original datasets
+    datasets_to_normalize = [
+        ("data/processed/general", "data/processed/general_normalized", "General"),
+        ("data/processed/call_center", "data/processed/call_center_normalized", "Call Center"),
+        ("data/processed/agent", "data/processed/agent_normalized", "Agent"),
+        ("data/processed/customer", "data/processed/customer_normalized", "Customer"),
+    ]
+    
+    for original_path, normalized_path, name in datasets_to_normalize:
+        if not Path(original_path).exists():
+            print(f"⚠️  Skipping {name} - original dataset not found at {original_path}")
+            continue
+        
+        print(f"\nLoading {name} from {original_path}...")
+        original_ds = load_from_disk(original_path)
+        
+        normalized_ds = normalize_dataset(original_ds, name)
+        
+        print(f"Saving to {normalized_path}...")
+        normalized_ds.save_to_disk(normalized_path)
+        
+        # Show sample
+        sample = normalized_ds['train'][0]
+        print(f"Sample normalized text: '{sample['text']}' (label: {sample['label']})")
+    
+    print("\n✓ All normalized datasets created successfully!")
+
 
 if __name__ == "__main__":
     create_datasets()
