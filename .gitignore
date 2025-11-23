@@ -56,6 +56,11 @@ chapter_03_normalized/results/metrics/*
 !chapter_03_normalized/results/figures/*.png
 chapter_03_normalized/experiment_log.txt
 
+# Chapter 4 results
+chapter_04_conversations/data/*
+chapter_04_conversations/results/metrics/*
+!chapter_04_conversations/results/figures/*.png
+
 # IDE
 .vscode/
 .idea/

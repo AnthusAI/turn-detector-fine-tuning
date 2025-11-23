@@ -113,6 +113,49 @@ For systems without reliable ASR punctuation, normalized models provide genuine 
 
 ---
 
+### [Chapter 4: Conversation-Level Evaluation](chapter_04_conversations/README.md)
+
+Chapter 3 showed models achieving 77.9% utterance-level accuracy. But what does this mean for real multi-turn conversations?
+
+#### The Question
+
+A model with 80% utterance accuracy will make ~4 errors in a 20-turn conversation. How do these errors manifest? Are they interruptions (predicting "Complete" too early) or missed turns (predicting "Incomplete" when done)?
+
+#### Metrics Beyond Accuracy
+
+**Conversation-level metrics:**
+- **Interruption Rate (IR):** How often does the model interrupt mid-utterance?
+- **Missed Turn Rate (MTR):** How often does it fail to detect turn completion?
+- **Perfect Conversation Rate (PCR):** What % of conversations have zero errors?
+
+#### Key Findings
+
+**Domain Normalized model on Call Center data:**
+- Default threshold (0.50): **22.4% interruptions**, 1.5% missed turns
+- Optimized threshold (0.74): **5.1% interruptions**, 18.7% missed turns
+
+**Threshold optimization reduced interruptions by 58.7%** by requiring higher confidence before predicting "Complete".
+
+#### The Trade-off
+
+Different applications tolerate different error types:
+- **Customer service:** Minimize interruptions (use high threshold)
+- **Information lookup:** Minimize delays (use low threshold)
+- **Balanced:** Optimize F1 score (medium threshold)
+
+Threshold tuning provides flexibility to adapt models to specific use cases without retraining.
+
+#### Perfect Conversations Are Rare
+
+Even the best normalized models achieve error-free conversations only **11%** of the time. This suggests:
+- Error accumulation is significant over multi-turn dialogues
+- Production systems need robust error handling
+- Conversation-level metrics reveal different insights than utterance accuracy
+
+👉 **[Read Chapter 4 for full analysis](chapter_04_conversations/README.md)**
+
+---
+
 ## 🛠️ Project Structure
 
 ```
@@ -127,7 +170,16 @@ For systems without reliable ASR punctuation, normalized models provide genuine 
 │   ├── streaming_inference.py      # Word-by-word prediction test
 │   └── punctuation_robustness_test.py  # Punctuation sensitivity test
 │
-├── chapter_03_normalized/     # (Coming) Normalized text training
+├── chapter_03_normalized/     # Experiment: Normalized text training
+│   ├── README.md              # Findings on semantic learning
+│   ├── run_experiment.py      # Reproduction script
+│   └── results/               # Metrics and visualizations
+│
+├── chapter_04_conversations/  # Analysis: Conversation-level metrics
+│   ├── README.md              # Multi-turn evaluation findings
+│   ├── run_evaluation.py      # Conversation evaluation
+│   ├── optimize_thresholds.py # Threshold tuning
+│   └── results/               # Conversation metrics & threshold curves
 │
 ├── src/                       # Centralized source code
 │   ├── data_processor.py      # Data loading & one-shot curation
@@ -168,29 +220,38 @@ python punctuation_robustness_test.py  # Punctuation sensitivity
 ### Chapter 3: Normalized Training
 ```bash
 cd chapter_03_normalized
-python run_experiment.py  # (Coming soon)
+python run_experiment.py
+```
+
+### Chapter 4: Conversation Evaluation
+```bash
+cd chapter_04_conversations
+python run_evaluation.py       # Multi-turn metrics
+python optimize_thresholds.py  # Threshold tuning
 ```
 
 ---
 
-## 🎯 Key Learnings (So Far)
+## 🎯 Key Learnings
 
-1. **Domain-specific fine-tuning works** - 100% accuracy on call center data
-2. **But high accuracy doesn't mean useful** - models learned punctuation shortcuts
-3. **Punctuation dependency is a critical flaw** - models are redundant with ASR punctuation
-4. **The real test is Chapter 3** - can models learn without punctuation cues?
+1. **Domain-specific fine-tuning works** - Call center models outperform general models
+2. **But high accuracy can be misleading** - Chapter 1's 100% relied on punctuation detection
+3. **Models can learn semantic patterns** - Chapter 3 shows 77.9% accuracy without punctuation
+4. **Conversation-level errors accumulate** - 77.9% utterance accuracy → only 6% perfect conversations
+5. **Threshold tuning matters** - Can reduce interruptions by 58.7% for specific use cases
 
-**This project explores what happens when you look beyond test metrics to understand what models might actually be learning.**
+**This project explores what happens when you look beyond test metrics to understand what models are actually learning and how they perform in realistic multi-turn scenarios.**
 
 ---
 
 ## 📖 Future Directions
 
-If Chapter 3's normalized training fails, potential next steps:
+Potential next steps for turn detection research:
 - **Multi-modal approaches:** Combine text with audio features (pitch, pause duration, energy)
-- **Sequence modeling:** Use conversation history, not just current utterance
-- **Explicit semantic features:** Train on syntactic completeness (subject-verb-object patterns)
-- **Honest conclusion:** Text-alone may be insufficient for robust turn detection
+- **Sequence modeling:** Incorporate conversation history and context
+- **Explicit semantic features:** Model syntactic completeness (subject-verb-object patterns)
+- **Advanced threshold strategies:** Dynamic thresholds based on conversation state
+- **Real ASR integration:** Test with actual speech recognition systems (no perfect punctuation)
 
 ---
 
